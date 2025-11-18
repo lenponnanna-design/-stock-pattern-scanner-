@@ -1,3 +1,4 @@
+import os
 import yfinance as yf
 import talib
 import pandas as pd
@@ -6,28 +7,45 @@ from telegram import Bot
 import schedule
 import time
 
-# === Telegram Bot Setup ===
-TELEGRAM_TOKEN = 'your_telegram_bot_token'  # Replace with your bot token
-CHAT_ID = 'your_telegram_chat_id'  # Replace with your Telegram chat ID
+# === Load Telegram credentials from environment variables ===
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+CHAT_ID = os.getenv('CHAT_ID')
+
+if TELEGRAM_TOKEN is None or CHAT_ID is None:
+    raise ValueError("Please set TELEGRAM_TOKEN and CHAT_ID environment variables.")
+
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # === Stocks list to scan - add your desired stock symbols here ===
-STOCKS = ['AAPL', 'MSFT', 'GOOG']  # Example symbols, update as needed
+STOCKS = [
+    'AAPL', 'MSFT', 'GOOG'
+    # Add more stock symbols here as needed
+]
 
 def fetch_data(symbol):
+    """Fetch daily stock data for the last 60 days."""
     data = yf.download(symbol, period="60d", interval="1d")
     return data
 
 def detect_patterns(df):
-    # Bullish Engulfing pattern detection
+    """
+    Detect candlestick patterns:
+    - Bullish Engulfing
+    - Hammer
+    - Spinning Top (approximate)
+    Returns dict with booleans for each pattern on the latest day.
+    """
     engulfing = talib.CDLENGULFING(df['Open'], df['High'], df['Low'], df['Close'])
-    # Hammer pattern detection
     hammer = talib.CDLHAMMER(df['Open'], df['High'], df['Low'], df['Close'])
-    # Spinning Top detection approx. by small real body and long shadows
+    
     body = np.abs(df['Close'] - df['Open'])
     candle_range = df['High'] - df['Low']
-    spinning_top = (body < (candle_range * 0.3)) & ((df['Close'] > df['Low'] + (candle_range * 0.3)) & (df['Open'] < df['High'] - (candle_range * 0.3)))
-
+    spinning_top = (
+        (body < (candle_range * 0.3)) &
+        (df['Close'] > df['Low'] + (candle_range * 0.3)) &
+        (df['Open'] < df['High'] - (candle_range * 0.3))
+    )
+    
     latest = {
         'bullish_engulfing': engulfing.iloc[-1] == 100,
         'hammer': hammer.iloc[-1] == 100,
@@ -36,19 +54,26 @@ def detect_patterns(df):
     return latest
 
 def trendline_breakout(df):
-    # Simple linear trendline from last 10 lows
+    """
+    Check if the latest closing price breaks above a simple linear trendline computed from last 10 lows.
+    """
     lows = df['Low'].tail(10)
     idx = np.arange(len(lows))
     coeffs = np.polyfit(idx, lows, 1)  # linear regression coefficients
     trendline = np.polyval(coeffs, idx)
-    # Check if latest close price is above the trendline
     breakout = df['Close'].iloc[-1] > trendline[-1]
     return breakout
 
 def scan_stocks():
+    """
+    Scans all listed stocks for candle patterns and breakout.
+    Returns a list of stock symbols with detected signals.
+    """
     results = []
     for stock in STOCKS:
         df = fetch_data(stock)
+        if df.empty:
+            continue
         patterns = detect_patterns(df)
         breakout = trendline_breakout(df)
         if patterns['bullish_engulfing'] or patterns['hammer'] or patterns['spinning_top'] or breakout:
@@ -56,6 +81,9 @@ def scan_stocks():
     return results
 
 def send_telegram_message(results):
+    """
+    Sends a Telegram message summarizing detected signals, or no signals if none found.
+    """
     if not results:
         message = "No candlestick patterns or trendline breakouts detected today."
     else:
@@ -73,18 +101,11 @@ def send_telegram_message(results):
     bot.send_message(chat_id=CHAT_ID, text=message)
 
 def job():
+    """
+    Main job to scan stocks and send the report.
+    """
     results = scan_stocks()
     send_telegram_message(results)
 
 if __name__ == "__main__":
-    # Scheduling the scanner to run every day at 16:30 (4:30 PM)
-    schedule.every().day.at("16:30").do(job)
-    print("Stock scanner started. Waiting for scheduled run...")
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
-
-# === Step 4 (Run these commands in your terminal to commit and push) ===
-# git add scanner.py
-# git commit -m "Add stock scanner with candlestick pattern & trendline breakout detection"
-# git push origin main
+    # Scheduling the scanner to run every day at
