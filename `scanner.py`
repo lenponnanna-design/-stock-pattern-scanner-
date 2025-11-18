@@ -1,0 +1,85 @@
+import yfinance as yf
+import talib
+import pandas as pd
+import numpy as np
+from telegram import Bot
+import schedule
+import time
+
+# Your Telegram bot token and chat ID
+TELEGRAM_TOKEN = 'your_telegram_bot_token'
+CHAT_ID = 'your_telegram_chat_id'
+bot = Bot(token=TELEGRAM_TOKEN)
+
+# List of stock symbols to scan
+STOCKS = ['AAPL', 'MSFT', 'GOOG']  # Add all stocks you want here
+
+def fetch_data(symbol):
+    data = yf.download(symbol, period="60d", interval="1d")
+    return data
+
+def detect_patterns(df):
+    # Bullish Engulfing
+    engulfing = talib.CDLENGULFING(df['Open'], df['High'], df['Low'], df['Close'])
+    # Hammer
+    hammer = talib.CDLHAMMER(df['Open'], df['High'], df['Low'], df['Close'])
+    # Spinning Top (approximate by small real body and long shadows)
+    body = np.abs(df['Close'] - df['Open'])
+    candle_range = df['High'] - df['Low']
+    spinning_top = (body < (candle_range * 0.3)) & ((df['Close'] > df['Low'] + (candle_range * 0.3)) & (df['Open'] < df['High'] - (candle_range * 0.3)))
+
+    latest = {
+        'bullish_engulfing': engulfing.iloc[-1] == 100,
+        'hammer': hammer.iloc[-1] == 100,
+        'spinning_top': spinning_top.iloc[-1]
+    }
+    return latest
+
+def trendline_breakout(df):
+    # Simple trendline: draw line between last two lows and see if close crosses above the line
+    lows = df['Low'][-10:]
+    idx = np.arange(len(lows))
+    coeffs = np.polyfit(idx, lows, 1)  # linear trend line
+    trendline = np.polyval(coeffs, idx)
+    # Check if latest close > trendline latest
+    breakout = df['Close'].iloc[-1] > trendline[-1]
+    return breakout
+
+def scan_stocks():
+    results = []
+    for stock in STOCKS:
+        df = fetch_data(stock)
+        patterns = detect_patterns(df)
+        breakout = trendline_breakout(df)
+        if patterns['bullish_engulfing'] or patterns['hammer'] or patterns['spinning_top'] or breakout:
+            results.append((stock, patterns, breakout))
+    return results
+
+def send_telegram_message(results):
+    if not results:
+        message = "No patterns or trendline breakouts detected today."
+    else:
+        message = "Stock Scan Results:\n"
+        for stock, patterns, breakout in results:
+            message += f"\n{stock}:\n"
+            if patterns['bullish_engulfing']:
+                message += " - Bullish Engulfing pattern\n"
+            if patterns['hammer']:
+                message += " - Hammer pattern\n"
+            if patterns['spinning_top']:
+                message += " - Spinning Top pattern\n"
+            if breakout:
+                message += " - Trendline Breakout detected\n"
+    bot.send_message(chat_id=CHAT_ID, text=message)
+
+def job():
+    results = scan_stocks()
+    send_telegram_message(results)
+
+if __name__ == "__main__":
+    # Schedule to run every day at 16:30 (4:30 PM)
+    schedule.every().day.at("16:30").do(job)
+    print("Stock scanner started. Waiting for scheduled run.")
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
