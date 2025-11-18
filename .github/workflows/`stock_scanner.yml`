@@ -1,0 +1,30 @@
+name: Daily Stock Scan
+
+on:
+  schedule:
+    - cron: '00 11 * * 1-5'  # Runs at 11:00 UTC Monday to Friday (adjust to your local market close time)
+  workflow_dispatch:         # Allows manual triggering from GitHub UI
+
+jobs:
+  run-stock-scanner:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.x
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance ta-lib pandas numpy python-telegram-bot schedule
+
+      - name: Run stock scanner script
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python scanner.py
